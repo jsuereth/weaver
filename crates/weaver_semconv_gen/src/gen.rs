@@ -337,10 +337,12 @@ impl<'a> AttributeTableView<'a> {
         }
     }
 
-    fn is_attribute_local(&self, _id: &str) -> bool {
-        // TODO - Fix finding local attributes.
-        // These are attributes NOT pulled in via `extend` or `constraint.include`
-        true
+    fn is_attribute_local(&self, id: &str) -> bool {
+        let mut result = false;
+        if let Some(lineage) = self.group.lineage.as_ref().and_then(|l| l.attributes.get(id)) {
+            result = !(lineage.is_include || lineage.locally_overridden_fields.is_empty())
+        } 
+        result
     }
 
     /// Returns attributes sorted for rendering.
@@ -373,14 +375,10 @@ impl<'a> AttributeTableView<'a> {
     ) -> Result<(), Error> {
         // If the user defined a tag, use it to filter attributes.
         let attributes: Vec<AttributeView<'_>> = match args.tag_filter() {
-            Some(tag) => self
-                .attributes(args.is_full())
-                .filter(|a| a.has_tag(tag))
-                .collect(),
+            Some(tag) => self.attributes(true).filter(|a| a.has_tag(tag)).collect(),
             None => self.attributes(args.is_full()).collect(),
         };
 
-        // Don't generate markdown if no attributes available.
         if attributes.is_empty() {
             return Ok(());
         }

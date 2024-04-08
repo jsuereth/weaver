@@ -25,6 +25,10 @@ pub struct AttributeLineage {
     #[serde(skip_serializing_if = "BTreeSet::is_empty")]
     #[serde(default)]
     pub locally_overridden_fields: BTreeSet<String>,
+
+    /// True if the attribute is included vs. referenced.
+    #[serde(default)]
+    pub is_include: bool,
 }
 
 /// Group lineage.
@@ -51,6 +55,7 @@ impl AttributeLineage {
             source_group: source_group.to_owned(),
             inherited_fields: Default::default(),
             locally_overridden_fields: Default::default(),
+            is_include: false,
         }
     }
 
@@ -62,6 +67,7 @@ impl AttributeLineage {
             source_group: source_group.to_owned(),
             inherited_fields: Default::default(),
             locally_overridden_fields: Default::default(),
+            is_include: false,
         };
         match attr_spec {
             AttributeSpec::Ref {
@@ -149,7 +155,7 @@ impl AttributeLineage {
     /// Determines if the attribute lineage is empty.
     #[must_use]
     pub fn is_empty(&self) -> bool {
-        self.inherited_fields.is_empty() && self.locally_overridden_fields.is_empty()
+        self.inherited_fields.is_empty() && self.locally_overridden_fields.is_empty() && !self.is_include
     }
 
     /// Determines the value of the brief field by evaluating the presence of a

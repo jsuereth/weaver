@@ -6,7 +6,7 @@ use std::collections::{BTreeMap, HashMap, HashSet};
 
 use serde::Deserialize;
 
-use weaver_resolved_schema::attribute::UnresolvedAttribute;
+use weaver_resolved_schema::attribute::{AttributeRef, UnresolvedAttribute};
 use weaver_resolved_schema::lineage::{AttributeLineage, GroupLineage};
 use weaver_resolved_schema::registry::{Constraint, Group, Registry};
 use weaver_semconv::attribute::AttributeSpec;
@@ -110,7 +110,7 @@ pub fn resolve_semconv_registry(
         handle_errors(errors)?;
     }
 
-    let all_include_constraints_resolved = resolve_include_constraints(&mut ureg);
+    let all_include_constraints_resolved = resolve_include_constraints(&mut ureg, attr_catalog);
     if !all_include_constraints_resolved {
         // Some `include` constraints could not be resolved.
         let mut errors = vec![];
@@ -368,7 +368,6 @@ fn resolve_attribute_references(
                     }
                 })
                 .collect();
-
             unresolved_group.group.attributes.extend(resolved_attr);
         }
 
@@ -449,7 +448,7 @@ fn resolve_extends_references(ureg: &mut UnresolvedRegistry) -> bool {
 /// and iterative algorithm that is most likely good enough for now. If the
 /// semconv registry becomes too large, we may need to revisit the resolution
 /// process to make it more efficient by using a topological sort algorithm.
-fn resolve_include_constraints(ureg: &mut UnresolvedRegistry) -> bool {
+fn resolve_include_constraints(ureg: &mut UnresolvedRegistry, attr_catalog: &AttributeCatalog,) -> bool {
     loop {
         let mut unresolved_include_count = 0;
         let mut resolved_include_count = 0;
@@ -491,6 +490,18 @@ fn resolve_include_constraints(ureg: &mut UnresolvedRegistry) -> bool {
             for constraint in unresolved_group.group.constraints.iter() {
                 if let Some(include) = &constraint.include {
                     if let Some(attributes) = group_attrs_index.get(include) {
+                        // First we add lineage information for include constraints.
+                        if let Some(lineage) = unresolved_group.group.lineage.as_mut() {
+                            for AttributeRef(id) in attributes {
+                                let attr_id = &attr_catalog.attribute_name_index()[*id as usize];
+                                lineage.add_attribute_lineage(attr_id.to_owned(), AttributeLineage {
+                                    source_group: include.to_owned(),
+                                    inherited_fields: Default::default(),
+                                    locally_overridden_fields: Default::default(),
+                                    is_include: true,
+                                })
+                            }
+                        }
                         attributes_to_import.extend(attributes.iter().cloned());
                         _ = resolved_includes.insert(include.clone());
 
