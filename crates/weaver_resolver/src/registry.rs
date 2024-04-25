@@ -81,7 +81,8 @@ pub fn resolve_semconv_registry(
         resolve_prefix_on_attributes(ureg_ref);
         resolve_extends_references(ureg_ref);
         resolve_attribute_references(ureg_ref, attr_catalog);
-        resolve_include_constraints(ureg_ref)
+        resolve_include_constraints(ureg_ref);
+        check_any_of_constraints(&ureg.registry, &attr_catalog.attribute_name_index())
     };
 
     if diagnostics.has_messages() {
@@ -99,13 +100,6 @@ pub fn resolve_semconv_registry(
             g.group
         })
         .collect();
-
-    // Check the `any_of` constraints.
-    let attr_name_index = attr_catalog.attribute_name_index();
-    let diagnostics = check_any_of_constraints(&ureg.registry, &attr_name_index);
-    if diagnostics.has_messages() {
-        return Err(Error::CompoundError(diagnostics.messages()));
-    }
 
     // All constraints are satisfied.
     // Remove the constraints from the resolved registry.
