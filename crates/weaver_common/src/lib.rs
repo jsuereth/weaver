@@ -363,3 +363,183 @@ impl Logger for TestLogger {
             .log(message);
     }
 }
+
+/// TODO
+#[derive(Debug, PartialEq)]
+#[must_use]
+pub struct DiagnosticResult<E> {
+    /// Exposed for macro.
+    pub is_fatal: bool,
+    /// Exposed for macro.
+    pub messages: Vec<E>,
+}
+
+/// TODO - DOn't use vec and optimise this.
+pub fn combine<E>(lhs: Vec<E>, rhs: Vec<E>) -> Vec<E> {
+    let mut result = Vec::with_capacity(lhs.len() + rhs.len());
+    result.extend(lhs);
+    result.extend(rhs);
+    result
+}
+
+/// TODO
+pub fn tell<E>(msg: E) -> DiagnosticResult<E> {
+    DiagnosticResult {
+        is_fatal: false,
+        messages: vec![msg],
+    }
+}
+
+impl<E> DiagnosticResult<E> {
+    /// TODO
+    pub fn new() -> DiagnosticResult<E> {
+        DiagnosticResult {
+            is_fatal: false,
+            messages: Vec::new(),
+        }
+    }
+
+    /// Clears all messages.
+    pub fn clear(&mut self) {
+        self.is_fatal = false;
+        self.messages.clear();
+    }
+
+    /// TODO
+    pub fn fail(self) -> DiagnosticResult<E> {
+        match self {
+            DiagnosticResult { messages, .. } => DiagnosticResult {
+                is_fatal: true,
+                messages,
+            },
+        }
+    }
+    /// TODO
+    pub fn tell(&mut self, msg: E) {
+        self.messages.push(msg);
+    }
+
+    /// TODO
+    pub fn merge(&mut self, other: DiagnosticResult<E>) {
+        self.messages.extend(other.messages)
+    }
+
+    /// TODO
+    pub fn has_messages(&self) -> bool {
+        match self {
+            DiagnosticResult { messages, .. } => !messages.is_empty(),
+        }
+    }
+    /// TODO
+    pub fn and_then<F>(self, f: F) -> DiagnosticResult<E>
+    where
+        F: FnOnce() -> DiagnosticResult<E>,
+    {
+        match self {
+            DiagnosticResult {
+                is_fatal: false,
+                messages: lhs,
+            } => match f() {
+                DiagnosticResult {
+                    is_fatal,
+                    messages: rhs,
+                } => DiagnosticResult {
+                    is_fatal,
+                    messages: combine(lhs, rhs),
+                },
+            },
+            DiagnosticResult {
+                is_fatal: true,
+                messages,
+            } => DiagnosticResult {
+                is_fatal: true,
+                messages,
+            },
+        }
+    }
+
+    /// TODO
+    pub fn is_ok(&self) -> bool {
+        !self.is_fatal
+    }
+    /// TODO
+    pub fn is_err(&self) -> bool {
+        self.is_fatal
+    }
+
+    /// TODO
+    pub fn messages(self) -> Vec<E> {
+        self.messages
+    }
+}
+
+/// TODO - document
+#[macro_export]
+macro_rules! collect_diagnostics {
+    ($result:expr) => {
+        $result
+    };
+    ($comp:expr; $($tail:tt)*) => {
+        match $comp {
+            $crate::DiagnosticResult { is_fatal, messages } => {
+                if is_fatal {
+                    $crate::DiagnosticResult { is_fatal, messages }
+                } else {
+                    match collect_diagnostics!($($tail)*) {
+                        $crate::DiagnosticResult { is_fatal, messages: rhs } =>
+                          $crate::DiagnosticResult { is_fatal, messages: $crate::combine(messages,rhs) }
+                    }
+                }
+            },
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::DiagnosticResult;
+
+    #[test]
+    fn check_macro() {
+        fn can_pass_one() -> DiagnosticResult<String> {
+            let mut result = DiagnosticResult::new();
+            result.tell("Test".into());
+            result
+        }
+        fn cant_pass_one() -> DiagnosticResult<String> {
+            let mut result = DiagnosticResult::new();
+            result.tell("Fail Test".into());
+            result.fail()
+        }
+        fn can_pass_two() -> DiagnosticResult<String> {
+            let mut result = DiagnosticResult::new();
+            result.tell("Test2.1".into());
+            result.tell("Test2.2".into());
+            result
+        }
+
+        let result: DiagnosticResult<String> = collect_diagnostics! {
+          can_pass_one();
+          can_pass_two()
+        };
+        assert_eq!(
+            result,
+            DiagnosticResult {
+                is_fatal: false,
+                messages: vec!("Test".into(), "Test2.1".into(), "Test2.2".into()),
+            }
+        );
+        let result: DiagnosticResult<String> = collect_diagnostics! {
+          can_pass_one();
+          cant_pass_one();
+          can_pass_two()
+        };
+        assert_eq!(
+            result,
+            DiagnosticResult {
+                is_fatal: true,
+                messages: vec!("Test".into(), "Fail Test".into()),
+            }
+        );
+    }
+}

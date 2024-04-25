@@ -6,7 +6,7 @@ use std::collections::{BTreeMap, HashMap, HashSet};
 
 use serde::Deserialize;
 
-use weaver_common::error::handle_errors;
+use weaver_common::{collect_diagnostics, DiagnosticResult};
 use weaver_resolved_schema::attribute::UnresolvedAttribute;
 use weaver_resolved_schema::lineage::{AttributeLineage, GroupLineage};
 use weaver_resolved_schema::registry::{Constraint, Group, Registry};
@@ -74,13 +74,19 @@ pub fn resolve_semconv_registry(
 ) -> Result<Registry, Error> {
     let mut ureg = unresolved_registry_from_specs(registry_url, registry);
 
-    resolve_prefix_on_attributes(&mut ureg)?;
+    // Collect diagnostics uses closures to avoid fatal errors calling future methods.
+    // We need this here to avoid borrowing mutable ureg in closures.
+    let ureg_ref = &mut ureg;
+    let diagnostics: DiagnosticResult<Error> = collect_diagnostics! {
+        resolve_prefix_on_attributes(ureg_ref);
+        resolve_extends_references(ureg_ref);
+        resolve_attribute_references(ureg_ref, attr_catalog);
+        resolve_include_constraints(ureg_ref)
+    };
 
-    resolve_extends_references(&mut ureg)?;
-
-    resolve_attribute_references(&mut ureg, attr_catalog)?;
-
-    resolve_include_constraints(&mut ureg)?;
+    if diagnostics.has_messages() {
+        return Err(Error::CompoundError(diagnostics.messages()));
+    }
 
     // Sort the attribute internal references in each group.
     // This is needed to ensure that the resolved registry is easy to compare
@@ -96,7 +102,10 @@ pub fn resolve_semconv_registry(
 
     // Check the `any_of` constraints.
     let attr_name_index = attr_catalog.attribute_name_index();
-    check_any_of_constraints(&ureg.registry, &attr_name_index)?;
+    let diagnostics = check_any_of_constraints(&ureg.registry, &attr_name_index);
+    if diagnostics.has_messages() {
+        return Err(Error::CompoundError(diagnostics.messages()));
+    }
 
     // All constraints are satisfied.
     // Remove the constraints from the resolved registry.
@@ -121,15 +130,15 @@ pub fn resolve_semconv_registry(
 pub fn check_any_of_constraints(
     registry: &Registry,
     attr_name_index: &[String],
-) -> Result<(), Error> {
-    let mut errors = vec![];
+) -> DiagnosticResult<Error> {
+    let mut result = DiagnosticResult::new();
 
     for group in registry.groups.iter() {
         // Build a list of attribute names for the group.
         let mut group_attr_names = HashSet::new();
         for attr_ref in group.attributes.iter() {
             match attr_name_index.get(attr_ref.0 as usize) {
-                None => errors.push(Error::UnresolvedAttributeRef {
+                None => result.tell(Error::UnresolvedAttributeRef {
                     group_id: group.id.clone(),
                     attribute_ref: attr_ref.0.to_string(),
                     provenance: group.provenance().to_owned(),
@@ -140,17 +149,13 @@ pub fn check_any_of_constraints(
             }
         }
 
-        if let Err(e) = check_group_any_of_constraints(
+        result.merge(check_group_any_of_constraints(
             group.id.as_ref(),
             group_attr_names,
             group.constraints.as_ref(),
-        ) {
-            errors.push(e);
-        }
+        ));
     }
-
-    handle_errors(errors)?;
-    Ok(())
+    result
 }
 
 /// Checks the `any_of` constraints for the given group.
@@ -158,7 +163,8 @@ fn check_group_any_of_constraints(
     group_id: &str,
     group_attr_names: HashSet<String>,
     constraints: &[Constraint],
-) -> Result<(), Error> {
+) -> DiagnosticResult<Error> {
+    let mut result = DiagnosticResult::new();
     let mut unsatisfied_any_of_constraints: HashMap<&Constraint, UnsatisfiedAnyOfConstraint> =
         HashMap::new();
 
@@ -187,17 +193,17 @@ fn check_group_any_of_constraints(
         }
     }
     if !unsatisfied_any_of_constraints.is_empty() {
-        let errors = unsatisfied_any_of_constraints
+        unsatisfied_any_of_constraints
             .into_values()
             .map(|v| Error::UnsatisfiedAnyOfConstraint {
                 group_id: group_id.to_owned(),
                 any_of: v.any_of,
                 missing_attributes: v.missing_attributes,
             })
-            .collect();
-        return Err(Error::CompoundError(errors));
+            .for_each(|e| result.tell(e));
+        return result.fail();
     }
-    Ok(())
+    result
 }
 
 /// Creates a semantic convention registry from a set of semantic convention
@@ -274,7 +280,7 @@ fn group_from_spec(group: GroupSpecWithProvenance) -> UnresolvedGroup {
 /// the group prefix before continuing resolution.
 ///
 /// This should be the *only* method that updates attribute ids.
-fn resolve_prefix_on_attributes(ureg: &mut UnresolvedRegistry) -> Result<(), Error> {
+fn resolve_prefix_on_attributes(ureg: &mut UnresolvedRegistry) -> DiagnosticResult<Error> {
     for unresolved_group in ureg.groups.iter_mut() {
         if !unresolved_group.group.prefix.is_empty() {
             for attribute in unresolved_group.attributes.iter_mut() {
@@ -284,7 +290,7 @@ fn resolve_prefix_on_attributes(ureg: &mut UnresolvedRegistry) -> Result<(), Err
             }
         }
     }
-    Ok(())
+    DiagnosticResult::new()
 }
 
 /// Resolves attribute references in the given registry.
@@ -299,11 +305,12 @@ fn resolve_prefix_on_attributes(ureg: &mut UnresolvedRegistry) -> Result<(), Err
 fn resolve_attribute_references(
     ureg: &mut UnresolvedRegistry,
     attr_catalog: &mut AttributeCatalog,
-) -> Result<(), Error> {
+) -> DiagnosticResult<Error> {
+    let mut result = DiagnosticResult::new();
     loop {
-        let mut errors = vec![];
         let mut resolved_attr_count = 0;
-
+        // We clear out previously reported errors.
+        result.clear();
         // Iterate over all groups and resolve the attributes.
         for unresolved_group in ureg.groups.iter_mut() {
             let mut resolved_attr = vec![];
@@ -326,7 +333,7 @@ fn resolve_attribute_references(
                         None
                     } else {
                         if let AttributeSpec::Ref { r#ref, .. } = &attr.spec {
-                            errors.push(Error::UnresolvedAttributeRef {
+                            result.tell(Error::UnresolvedAttributeRef {
                                 group_id: unresolved_group.group.id.clone(),
                                 attribute_ref: r#ref.clone(),
                                 provenance: unresolved_group.provenance.clone(),
@@ -340,7 +347,7 @@ fn resolve_attribute_references(
             unresolved_group.group.attributes.extend(resolved_attr);
         }
 
-        if errors.is_empty() {
+        if !result.has_messages() {
             break;
         }
 
@@ -349,11 +356,11 @@ fn resolve_attribute_references(
         // It means that we have an issue with the semantic convention
         // specifications.
         if resolved_attr_count == 0 {
-            return Err(Error::CompoundError(errors));
+            return result.fail();
         }
     }
 
-    Ok(())
+    result
 }
 
 /// Resolves the `extends` references in the given registry.
@@ -362,9 +369,10 @@ fn resolve_attribute_references(
 /// be resolved in an iteration.
 ///
 /// Returns true if all the `extends` references have been resolved.
-fn resolve_extends_references(ureg: &mut UnresolvedRegistry) -> Result<(), Error> {
+fn resolve_extends_references(ureg: &mut UnresolvedRegistry) -> DiagnosticResult<Error> {
+    let mut result = DiagnosticResult::new();
     loop {
-        let mut errors = vec![];
+        result.clear();
         let mut resolved_extends_count = 0;
 
         // Create a map group_id -> attributes for groups
@@ -394,7 +402,7 @@ fn resolve_extends_references(ureg: &mut UnresolvedRegistry) -> Result<(), Error
                     );
                     resolved_extends_count += 1;
                 } else {
-                    errors.push(Error::UnresolvedExtendsRef {
+                    result.tell(Error::UnresolvedExtendsRef {
                         group_id: unresolved_group.group.id.clone(),
                         extends_ref: unresolved_group
                             .group
@@ -407,7 +415,7 @@ fn resolve_extends_references(ureg: &mut UnresolvedRegistry) -> Result<(), Error
             }
         }
 
-        if errors.is_empty() {
+        if !result.has_messages() {
             break;
         }
         // If we still have unresolved `extends` but we did not resolve any
@@ -415,10 +423,10 @@ fn resolve_extends_references(ureg: &mut UnresolvedRegistry) -> Result<(), Error
         // It means that we have an issue with the semantic convention
         // specifications.
         if resolved_extends_count == 0 {
-            return Err(Error::CompoundError(errors));
+            return result.fail();
         }
     }
-    Ok(())
+    result
 }
 
 /// Resolves the `include` constraints in the given registry.
@@ -427,9 +435,10 @@ fn resolve_extends_references(ureg: &mut UnresolvedRegistry) -> Result<(), Error
 /// and iterative algorithm that is most likely good enough for now. If the
 /// semconv registry becomes too large, we may need to revisit the resolution
 /// process to make it more efficient by using a topological sort algorithm.
-fn resolve_include_constraints(ureg: &mut UnresolvedRegistry) -> Result<(), Error> {
+fn resolve_include_constraints(ureg: &mut UnresolvedRegistry) -> DiagnosticResult<Error> {
+    let mut result = DiagnosticResult::new();
     loop {
-        let mut errors = vec![];
+        result.clear();
         let mut resolved_include_count = 0;
 
         // Create a map group_id -> vector of attribute ref for groups
@@ -478,7 +487,7 @@ fn resolve_include_constraints(ureg: &mut UnresolvedRegistry) -> Result<(), Erro
 
                         resolved_include_count += 1;
                     } else {
-                        errors.push(Error::UnresolvedIncludeRef {
+                        result.tell(Error::UnresolvedIncludeRef {
                             group_id: unresolved_group.group.id.clone(),
                             include_ref: include.clone(),
                             provenance: unresolved_group.provenance.clone(),
@@ -497,7 +506,7 @@ fn resolve_include_constraints(ureg: &mut UnresolvedRegistry) -> Result<(), Erro
             }
         }
 
-        if errors.is_empty() {
+        if !result.has_messages() {
             break;
         }
 
@@ -506,10 +515,10 @@ fn resolve_include_constraints(ureg: &mut UnresolvedRegistry) -> Result<(), Erro
         // It means that we have an issue with the semantic convention
         // specifications.
         if resolved_include_count == 0 {
-            return Err(Error::CompoundError(errors));
+            return result.fail();
         }
     }
-    Ok(())
+    result
 }
 
 fn resolve_inheritance_attrs(
@@ -869,14 +878,14 @@ groups:
         // No attribute and no constraint.
         let group_attr_names = HashSet::new();
         let constraints = vec![];
-        check_group_any_of_constraints("group", group_attr_names, &constraints)?;
+        assert!(check_group_any_of_constraints("group", group_attr_names, &constraints).is_ok());
 
         // Attributes and no constraint.
         let group_attr_names = vec!["attr1".to_owned(), "attr2".to_owned()]
             .into_iter()
             .collect();
         let constraints = vec![];
-        check_group_any_of_constraints("group", group_attr_names, &constraints)?;
+        assert!(check_group_any_of_constraints("group", group_attr_names, &constraints).is_ok());
 
         // Attributes and multiple constraints (all satisfiable).
         let group_attr_names = vec!["attr1".to_owned(), "attr2".to_owned(), "attr3".to_owned()]
@@ -896,7 +905,7 @@ groups:
                 include: None,
             },
         ];
-        check_group_any_of_constraints("group", group_attr_names, &constraints)?;
+        assert!(check_group_any_of_constraints("group", group_attr_names, &constraints).is_ok());
 
         // Attributes and multiple constraints (one unsatisfiable).
         let group_attr_names = vec!["attr1".to_owned(), "attr2".to_owned(), "attr3".to_owned()]
