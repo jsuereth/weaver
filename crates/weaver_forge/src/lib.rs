@@ -2,13 +2,15 @@
 
 #![doc = include_str!("../README.md")]
 
+use std::borrow::Cow;
 use std::fmt::{Debug, Display, Formatter};
-use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
+use std::{fs, io};
 
+use minijinja::syntax::SyntaxConfig;
 use minijinja::value::{from_args, Object};
-use minijinja::{path_loader, Environment, State, Value};
+use minijinja::{Environment, ErrorKind, State, Value};
 use rayon::iter::IntoParallelIterator;
 use rayon::iter::ParallelIterator;
 use serde::Serialize;
@@ -27,6 +29,7 @@ use crate::debug::error_summary;
 use crate::error::Error::InvalidConfigFile;
 use crate::extensions::acronym::acronym;
 use crate::extensions::case_converter::case_converter;
+use crate::extensions::code;
 use crate::registry::{TemplateGroup, TemplateRegistry};
 
 mod config;
@@ -54,6 +57,14 @@ impl Default for GeneratorConfig {
     }
 }
 
+impl GeneratorConfig {
+    /// Create a new generator configuration with the given root directory.
+    #[must_use]
+    pub fn new(root_dir: PathBuf) -> Self {
+        Self { root_dir }
+    }
+}
+
 /// A template object accessible from the template.
 #[derive(Debug, Clone)]
 struct TemplateObject {
@@ -78,7 +89,7 @@ impl Display for TemplateObject {
 
 impl Object for TemplateObject {
     fn call_method(
-        &self,
+        self: &Arc<Self>,
         _state: &State<'_, '_>,
         name: &str,
         args: &[Value],
@@ -89,7 +100,7 @@ impl Object for TemplateObject {
             Ok(Value::from(""))
         } else {
             Err(minijinja::Error::new(
-                minijinja::ErrorKind::UnknownMethod,
+                ErrorKind::UnknownMethod,
                 format!("template has no method named {name}"),
             ))
         }
@@ -154,6 +165,33 @@ impl TemplateEngine {
             path: target_path.clone(),
             target_config: TargetConfig::try_new(&target_path)?,
         })
+    }
+
+    /// Generate a template snippet from serializable context and a snippet identifier.
+    ///
+    /// # Arguments
+    ///
+    /// * `log` - The logger to use for logging
+    /// * `context` - The context to use when generating snippets.
+    /// * `snippet_id` - The template to use when rendering the snippet.
+    pub fn generate_snippet<T: Serialize>(
+        &self,
+        context: &T,
+        snippet_id: String,
+    ) -> Result<String, Error> {
+        // TODO - find the snippet by id.
+
+        // Create a read-only context for the filter evaluations
+        let context = serde_json::to_value(context).map_err(|e| ContextSerializationFailed {
+            error: e.to_string(),
+        })?;
+
+        let engine = self.template_engine()?;
+        let template = engine
+            .get_template(&snippet_id)
+            .map_err(error::jinja_err_convert)?;
+        let result = template.render(context).map_err(error::jinja_err_convert)?;
+        Ok(result)
     }
 
     /// Generate artifacts from a serializable context and a template directory,
@@ -303,12 +341,18 @@ impl TemplateEngine {
         engine.add_global("template", Value::from_object(template_object.clone()));
 
         log.loading(&format!("Generating file {}", template_file));
-        let template = engine
-            .get_template(template_file)
-            .map_err(|e| InvalidTemplateFile {
-                template: template_path.to_path_buf(),
-                error: e.to_string(),
-            })?;
+
+        let template = engine.get_template(template_file).map_err(|e| {
+            let templates = engine
+                .templates()
+                .map(|(name, _)| name.to_owned())
+                .collect::<Vec<_>>();
+            let error = format!("{}. Available templates: {:?}", e, templates);
+            InvalidTemplateFile {
+                template: template_file.into(),
+                error,
+            }
+        })?;
 
         let output = template
             .render(ctx.clone())
@@ -326,14 +370,36 @@ impl TemplateEngine {
     /// Create a new template engine based on the target configuration.
     fn template_engine(&self) -> Result<Environment<'_>, Error> {
         let mut env = Environment::new();
-        env.set_loader(path_loader(&self.path));
-        env.set_syntax(self.target_config.template_syntax.clone().into())
+        let template_syntax = self.target_config.template_syntax.clone();
+
+        let syntax = SyntaxConfig::builder()
+            .block_delimiters(
+                Cow::Owned(template_syntax.block_start),
+                Cow::Owned(template_syntax.block_end),
+            )
+            .variable_delimiters(
+                Cow::Owned(template_syntax.variable_start),
+                Cow::Owned(template_syntax.variable_end),
+            )
+            .comment_delimiters(
+                Cow::Owned(template_syntax.comment_start),
+                Cow::Owned(template_syntax.comment_end),
+            )
+            .build()
             .map_err(|e| InvalidConfigFile {
                 config_file: self.path.join(WEAVER_YAML),
                 error: e.to_string(),
             })?;
 
-        // Register case conversion filters based on the target configuration
+        env.set_loader(cross_platform_loader(&self.path));
+        env.set_syntax(syntax);
+
+        // Register code-oriented filters
+        env.add_filter("comment_with_prefix", code::comment_with_prefix);
+        env.add_filter(
+            "type_mapping",
+            code::type_mapping(self.target_config.type_mapping.clone()),
+        );
         env.add_filter(
             "file_name",
             case_converter(self.target_config.file_name.clone()),
@@ -354,6 +420,8 @@ impl TemplateEngine {
             "field_name",
             case_converter(self.target_config.field_name.clone()),
         );
+
+        // Register case conversion filters
         env.add_filter("lower_case", case_converter(CaseConvention::LowerCase));
         env.add_filter("upper_case", case_converter(CaseConvention::UpperCase));
         env.add_filter("title_case", case_converter(CaseConvention::TitleCase));
@@ -375,26 +443,38 @@ impl TemplateEngine {
 
         env.add_filter("acronym", acronym(self.target_config.acronyms.clone()));
 
+        // Register custom OpenTelemetry filters and tests
+        env.add_filter("attribute_namespace", extensions::otel::attribute_namespace);
+        env.add_filter(
+            "attribute_registry_namespace",
+            extensions::otel::attribute_registry_namespace,
+        );
+        env.add_filter(
+            "attribute_registry_title",
+            extensions::otel::attribute_registry_title,
+        );
+        env.add_filter(
+            "attribute_registry_file",
+            extensions::otel::attribute_registry_file,
+        );
+        env.add_filter("attribute_sort", extensions::otel::attribute_sort);
+        env.add_filter("metric_namespace", extensions::otel::metric_namespace);
+        env.add_filter("required", extensions::otel::required);
+        env.add_filter("not_required", extensions::otel::not_required);
+        // ToDo Implement more filters: stable, experimental, deprecated
+        env.add_test("stable", extensions::otel::is_stable);
+        env.add_test("experimental", extensions::otel::is_experimental);
+        env.add_test("deprecated", extensions::otel::is_deprecated);
+        // ToDo Implement more tests: required, not_required
+
         // env.add_filter("unique_attributes", extensions::unique_attributes);
         // env.add_filter("instrument", extensions::instrument);
-        // env.add_filter("required", extensions::required);
-        // env.add_filter("not_required", extensions::not_required);
         // env.add_filter("value", extensions::value);
         // env.add_filter("with_value", extensions::with_value);
         // env.add_filter("without_value", extensions::without_value);
         // env.add_filter("with_enum", extensions::with_enum);
         // env.add_filter("without_enum", extensions::without_enum);
-        // env.add_filter("comment", extensions::comment);
-        // env.add_filter(
-        //     "type_mapping",
-        //     extensions::TypeMapping {
-        //         type_mapping: target_config.type_mapping,
-        //     },
-        // );
 
-        // Register custom testers
-        // tera.register_tester("required", testers::is_required);
-        // tera.register_tester("not_required", testers::is_not_required);
         Ok(env)
     }
 
@@ -427,6 +507,59 @@ impl TemplateEngine {
     }
 }
 
+// The template loader provided by MiniJinja is not cross-platform.
+fn cross_platform_loader<'x, P: AsRef<Path> + 'x>(
+    dir: P,
+) -> impl for<'a> Fn(&'a str) -> Result<Option<String>, minijinja::Error> + Send + Sync + 'static {
+    let dir = dir.as_ref().to_path_buf();
+    move |name| {
+        let path = safe_join(&dir, name)?;
+        match fs::read_to_string(path) {
+            Ok(result) => Ok(Some(result)),
+            Err(err) if err.kind() == io::ErrorKind::NotFound => Ok(None),
+            Err(err) => Err(minijinja::Error::new(
+                ErrorKind::InvalidOperation,
+                "could not read template",
+            )
+            .with_source(err)),
+        }
+    }
+}
+
+// Combine a root path and a template name, ensuring that the combined path is
+// a subdirectory of the base path.
+fn safe_join(root: &Path, template: &str) -> Result<PathBuf, minijinja::Error> {
+    let mut path = root.to_path_buf();
+    path.push(template);
+
+    // Canonicalize the paths to resolve any `..` or `.` components
+    let canonical_root = root.canonicalize().map_err(|e| {
+        minijinja::Error::new(
+            ErrorKind::InvalidOperation,
+            format!("Failed to canonicalize root path: {}", e),
+        )
+    })?;
+    let canonical_combined = path.canonicalize().map_err(|e| {
+        minijinja::Error::new(
+            ErrorKind::InvalidOperation,
+            format!("Failed to canonicalize combined path: {}", e),
+        )
+    })?;
+
+    // Verify that the canonical combined path starts with the canonical root path
+    if canonical_combined.starts_with(&canonical_root) {
+        Ok(canonical_combined)
+    } else {
+        Err(minijinja::Error::new(
+            ErrorKind::InvalidOperation,
+            format!(
+                "The combined path is not a subdirectory of the root path: {:?} -> {:?}",
+                canonical_root, canonical_combined
+            ),
+        ))
+    }
+}
+
 // Helper filter to work around lack of `list.append()` support in minijinja.
 // Will take a list of lists and return a new list containing only elements of sublists.
 fn flatten(value: Value) -> Result<Value, minijinja::Error> {
@@ -450,7 +583,7 @@ fn split_id(value: Value) -> Result<Vec<Value>, minijinja::Error> {
             Ok(values)
         }
         None => Err(minijinja::Error::new(
-            minijinja::ErrorKind::InvalidOperation,
+            ErrorKind::InvalidOperation,
             format!("Expected string, found: {value}"),
         )),
     }
@@ -458,19 +591,19 @@ fn split_id(value: Value) -> Result<Vec<Value>, minijinja::Error> {
 
 #[cfg(test)]
 mod tests {
-    use globset::Glob;
     use std::collections::HashSet;
     use std::fs;
     use std::path::Path;
 
+    use globset::Glob;
     use walkdir::WalkDir;
 
-    use crate::config::{ApplicationMode, TemplateConfig};
     use weaver_common::TestLogger;
     use weaver_diff::diff_output;
     use weaver_resolver::SchemaResolver;
     use weaver_semconv::registry::SemConvRegistry;
 
+    use crate::config::{ApplicationMode, TemplateConfig};
     use crate::debug::print_dedup_errors;
     use crate::filter::Filter;
     use crate::registry::TemplateRegistry;
