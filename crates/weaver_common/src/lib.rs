@@ -425,12 +425,31 @@ impl<E> DiagnosticResult<E> {
         self.messages.extend(other.messages)
     }
 
+    /// A consuming version of merge.
+    pub fn combine(self, other: DiagnosticResult<E>) -> DiagnosticResult<E> {
+        DiagnosticResult {
+            messages: self.messages.into_iter().chain(other.messages.into_iter()).collect(),
+            is_fatal: self.is_fatal || other.is_fatal
+        }
+    }
+
     /// TODO
     pub fn has_messages(&self) -> bool {
         match self {
             DiagnosticResult { messages, .. } => !messages.is_empty(),
         }
     }
+
+
+    /// TODO
+    /// Example: `let result = result.report()?`
+    pub fn report<Error : From<Vec<E>>>(self) -> Result<DiagnosticResult<E>, Error> {
+        match self {
+            DiagnosticResult { is_fatal: true, messages } => Err(messages.into()),
+            other => Ok(other),
+        }
+    }
+
     /// TODO
     pub fn and_then<F>(self, f: F) -> DiagnosticResult<E>
     where

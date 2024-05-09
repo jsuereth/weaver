@@ -77,13 +77,20 @@ pub fn resolve_semconv_registry(
     // Collect diagnostics uses closures to avoid fatal errors calling future methods.
     // We need this here to avoid borrowing mutable ureg in closures.
     let ureg_ref = &mut ureg;
-    let diagnostics: DiagnosticResult<Error> = collect_diagnostics! {
-        resolve_prefix_on_attributes(ureg_ref);
-        resolve_extends_references(ureg_ref);
-        resolve_attribute_references(ureg_ref, attr_catalog);
-        resolve_include_constraints(ureg_ref);
-        check_any_of_constraints(&ureg.registry, &attr_catalog.attribute_name_index())
-    };
+    // Non-macro version of collecting diagnostics.
+    let diagnostics = DiagnosticResult::new();
+    let diagnostics = diagnostics.combine(resolve_prefix_on_attributes(ureg_ref)).report()?;
+    let diagnostics = diagnostics.combine(resolve_extends_references(ureg_ref)).report()?;
+    let diagnostics = diagnostics.combine(resolve_attribute_references(ureg_ref, attr_catalog)).report()?;
+    let diagnostics = diagnostics.combine(resolve_include_constraints(ureg_ref)).report()?;
+    let diagnostics = diagnostics.combine(check_any_of_constraints(ureg_ref, &attr_catalog.attribute_name_index())).report()?;
+    // let diagnostics: DiagnosticResult<Error> = collect_diagnostics! {
+    //     resolve_prefix_on_attributes(ureg_ref);
+    //     resolve_extends_references(ureg_ref);
+    //     resolve_attribute_references(ureg_ref, attr_catalog);
+    //     resolve_include_constraints(ureg_ref);
+    //     check_any_of_constraints(&ureg.registry, &attr_catalog.attribute_name_index())
+    // };
 
     if diagnostics.has_messages() {
         return Err(Error::CompoundError(diagnostics.messages()));

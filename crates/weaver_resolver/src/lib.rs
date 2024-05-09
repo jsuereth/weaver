@@ -141,6 +141,12 @@ pub enum Error {
     CompoundError(Vec<Error>),
 }
 
+impl From<Vec<Error>> for Error {
+    fn from(value: Vec<Error>) -> Self {
+        Error::CompoundError(value)
+    }
+}
+
 impl WeaverError<Error> for Error {
     /// Returns a list of human-readable error messages.
     fn errors(&self) -> Vec<String> {
