@@ -2,13 +2,17 @@
 
 //! Semantic convention specification.
 
-use crate::group::{GroupSpec, GroupWildcard};
+use crate::attribute::{AttributeRole, AttributeSpec};
+use crate::group::{GroupSpec, GroupType, GroupWildcard};
 use crate::json_schema::JsonSchemaValidator;
 use crate::provenance::Provenance;
-use crate::v2::SemConvSpecV2;
+use crate::v2::attribute::GroupRef;
+use crate::v2::attribute_group::AttributeGroup;
+use crate::v2::{self, SemConvSpecV2};
 use crate::Error;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
 use std::fs::File;
 use std::path::Path;
 use weaver_common::result::WResult;
@@ -156,6 +160,236 @@ impl SemConvSpecV1 {
     #[must_use]
     pub fn imports(&self) -> Option<&Imports> {
         self.imports.as_ref()
+    }
+
+    /// Converts this specification into a V2
+    #[must_use]
+    pub fn into_v2(self) -> SemConvSpecV2 {
+        let mut attributes = Vec::new();
+        let mut entities = Vec::new();
+        let mut events = Vec::new();
+        let mut spans = Vec::new();
+        let mut metrics = Vec::new();
+        let mut attribute_groups = Vec::new();
+        for g in self.groups {
+            match g.r#type {
+                GroupType::Metric => {
+                    let mut attrs = Vec::new();
+                    // Handle group extends.
+                    if let Some(group_ref) = g.extends {
+                        attrs.push(v2::attribute::AttributeOrGroupRef::Group(v2::attribute::GroupRef {
+                            ref_group: group_ref.into(),
+                        }));
+                    }
+                    for a in g.attributes {
+                        match a {
+                            // Just create a ref.
+                            AttributeSpec::Ref {
+                                r#ref,
+                                brief,
+                                examples,
+                                requirement_level,
+                                note,
+                                stability,
+                                deprecated,
+                                annotations,
+                                ..
+                            } => {
+                                attrs.push(v2::attribute::AttributeOrGroupRef::Attribute(v2::attribute::AttributeRef {
+                                    r#ref,
+                                    brief,
+                                    examples,
+                                    requirement_level,
+                                    note,
+                                    stability,
+                                    deprecated,
+                                    annotations: annotations.unwrap_or_default(),
+                                }));
+                            }
+                            // Register an attribute, then create a ref.
+                            AttributeSpec::Id {
+                                id,
+                                r#type,
+                                examples,
+                                brief,
+                                note,
+                                stability,
+                                deprecated,
+                                annotations,
+                                requirement_level,
+                                ..
+                            } => {
+                                attributes.push(v2::attribute::AttributeDef {
+                                    key: id.clone(),
+                                    r#type,
+                                    examples,
+                                    common: v2::CommonFields { 
+                                        brief: brief.unwrap_or_default(),
+                                        note,
+                                        stability: stability.unwrap_or(crate::stability::Stability::Alpha),
+                                        deprecated,
+                                        annotations: annotations.unwrap_or_default()
+                                    },
+                                });
+                                attrs.push(v2::attribute::AttributeOrGroupRef::Attribute(v2::attribute::AttributeRef {
+                                    r#ref: id,
+                                    brief: None,
+                                    examples: None,
+                                    requirement_level: Some(requirement_level),
+                                    note: None,
+                                    stability: None,
+                                    deprecated: None,
+                                    annotations: BTreeMap::new(),
+                                }));
+                            }
+                        }
+                    }
+                    metrics.push(v2::metric::Metric {
+                        name: g.metric_name.unwrap_or_default().into(),
+                        instrument: g.instrument.unwrap_or(crate::group::InstrumentSpec::Gauge),
+                        unit: g.unit.unwrap_or("{1}".to_owned()),
+                        attributes: attrs,
+                        entity_associations: g.entity_associations,
+                        common: v2::CommonFields {
+                            brief: g.brief,
+                            note: g.note,
+                            stability: g.stability.unwrap_or(crate::stability::Stability::Alpha),
+                            deprecated: g.deprecated,
+                            annotations: g.annotations.unwrap_or_default(),
+                        },
+                    });
+                }
+                GroupType::Entity => {
+                    if let Some(r#type) = g.name {
+                        let mut identity = Vec::new();
+                        let mut description = Vec::new();
+                        for a in g.attributes {
+                            match a {
+                                AttributeSpec::Ref {
+                                    role,
+                                    r#ref,
+                                    brief,
+                                    examples,
+                                    requirement_level,
+                                    note,
+                                    stability,
+                                    deprecated,
+                                    annotations,
+                                    ..
+                                } => match role {
+                                    Some(AttributeRole::Identifying) => {
+                                        identity.push(v2::attribute::AttributeRef {
+                                            r#ref,
+                                            brief,
+                                            examples,
+                                            requirement_level,
+                                            note,
+                                            stability,
+                                            deprecated,
+                                            annotations: annotations.unwrap_or_default(),
+                                        });
+                                    }
+                                    _ => {
+                                        description.push(v2::attribute::AttributeRef {
+                                            r#ref,
+                                            brief,
+                                            examples,
+                                            requirement_level,
+                                            note,
+                                            stability,
+                                            deprecated,
+                                            annotations: annotations.unwrap_or_default(),
+                                        });
+                                    }
+                                },
+                                // We need to register a new attribute then create a ref for the entity.
+                                AttributeSpec::Id {
+                                    id,
+                                    r#type,
+                                    examples,
+                                    brief,
+                                    note,
+                                    stability,
+                                    deprecated,
+                                    annotations,
+                                    role,
+                                    requirement_level,
+                                    ..
+                                } => {
+                                    attributes.push(v2::attribute::AttributeDef {
+                                        key: id.clone(),
+                                        r#type,
+                                        examples,
+                                        common: v2::CommonFields {
+                                            brief: brief.unwrap_or("".to_owned()),
+                                            note,
+                                            stability: stability
+                                                .unwrap_or(crate::stability::Stability::Alpha),
+                                            deprecated,
+                                            annotations: annotations.unwrap_or_default(),
+                                        },
+                                    });
+                                    match role {
+                                        Some(AttributeRole::Identifying) => {
+                                            identity.push(v2::attribute::AttributeRef {
+                                                r#ref: id,
+                                                brief: None,
+                                                examples: None,
+                                                requirement_level: Some(requirement_level),
+                                                note: None,
+                                                stability: None,
+                                                deprecated: None,
+                                                annotations: BTreeMap::new(),
+                                            });
+                                        }
+                                        _ => {
+                                            description.push(v2::attribute::AttributeRef {
+                                                r#ref: id,
+                                                brief: None,
+                                                examples: None,
+                                                requirement_level: Some(requirement_level),
+                                                note: None,
+                                                stability: None,
+                                                deprecated: None,
+                                                annotations: BTreeMap::new(),
+                                            });
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                        entities.push(v2::entity::Entity {
+                            r#type: r#type.into(),
+                            identity,
+                            description,
+                            common: v2::CommonFields {
+                                brief: g.brief,
+                                note: g.note,
+                                stability: g
+                                    .stability
+                                    .unwrap_or(crate::stability::Stability::Alpha),
+                                deprecated: g.deprecated,
+                                annotations: g.annotations.unwrap_or_default(),
+                            },
+                        });
+                    } else {
+                        log::warn!("Unsupported entity {} - no entity type defined.", g.id)
+                    }
+                }
+                unused => {
+                    log::warn!("Group type {unused:?} not available in V2");
+                }
+            }
+        }
+        SemConvSpecV2 {
+            attributes,
+            entities,
+            events,
+            metrics,
+            spans,
+            attribute_groups,
+            imports: self.imports.clone(),
+        }
     }
 }
 
@@ -782,5 +1016,77 @@ attributes:
         let mut group_ids: Vec<&str> = semconv_spec.groups.iter().map(|g| g.id.as_str()).collect();
         group_ids.sort();
         assert_eq!(vec!["registry.test", "span.group2"], group_ids);
+    }
+
+    #[test]
+    fn test_semconv_v1_to_v2() {
+        let spec = r#"
+        groups:
+          - id: "group1"
+            stability: "stable"
+            brief: "description1"
+            span_kind: "client"
+            type: span
+            attributes:
+              - id: "attr1"
+                stability: "stable"
+                brief: "description1"
+                type: "string"
+                examples: "example1"
+          - id: "group2"
+            stability: "stable"
+            brief: "description2"
+            type: entity
+            name: "test.entity"
+            attributes:
+              - id: "attr2"
+                stability: "stable"
+                brief: "description2"
+                type: "int"
+                role: identifying
+          - id: "group3"
+            type: metric
+            brief: "A test metric"
+            metric_name: "test.metric"
+            unit: "s"
+            instrument: counter
+            attributes:
+              - id: "attr3"
+                stability: "stable"
+                brief: "description3"
+                type: "string"
+              - ref: "attr1"
+        "#;
+        let v1 = serde_yaml::from_str::<SemConvSpecV1>(spec).expect("Failed to parse spec");
+        let v2 = v1.into_v2();
+        let result = serde_yaml::to_string(&v2).expect("failed to serialize v2");
+        let expected = r#"attributes:
+- key: attr2
+  type: int
+  brief: description2
+  stability: stable
+- key: attr3
+  type: string
+  brief: description3
+  stability: stable
+entities:
+- type: test.entity
+  identity:
+  - ref: attr2
+    requirement_level: recommended
+  brief: description2
+  stability: stable
+metrics:
+- name: test.metric
+  instrument: counter
+  unit: s
+  attributes:
+  - ref: attr3
+    requirement_level: recommended
+  - ref: attr1
+  brief: A test metric
+  stability: alpha
+"#;
+        assert_eq!(result, expected, "V2 schema does not match expected:\n{}", weaver_diff::diff_output(&expected, &result));
     }
 }

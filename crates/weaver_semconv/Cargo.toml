@@ -17,6 +17,7 @@ walkdir.workspace = true
 
 [dependencies]
 weaver_common = { path = "../weaver_common" }
+weaver_diff = { path = "../weaver_diff" }
 
 serde.workspace = true
 serde_yaml.workspace = true

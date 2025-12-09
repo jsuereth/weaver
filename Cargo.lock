@@ -5407,6 +5407,7 @@ dependencies = [
  "ureq",
  "walkdir",
  "weaver_common",
+ "weaver_diff",
 ]
 
 [[package]]
