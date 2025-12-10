@@ -263,6 +263,98 @@ impl SemConvSpecV1 {
                         },
                     }));
                 }
+                GroupType::Event => {
+                    let mut attrs = Vec::new();
+                    // Handle group extends.
+                    if let Some(group_ref) = g.extends {
+                        attrs.push(v2::attribute::AttributeOrGroupRef::Group(
+                            v2::attribute::GroupRef {
+                                ref_group: group_ref.into(),
+                            },
+                        ));
+                    }
+                    // Convert all attributes
+                    for a in g.attributes {
+                        match a {
+                            // Just create a ref.
+                            AttributeSpec::Ref {
+                                r#ref,
+                                brief,
+                                examples,
+                                requirement_level,
+                                note,
+                                stability,
+                                deprecated,
+                                annotations,
+                                ..
+                            } => {
+                                attrs.push(v2::attribute::AttributeOrGroupRef::Attribute(
+                                    v2::attribute::AttributeRef {
+                                            r#ref,
+                                            brief,
+                                            examples,
+                                            requirement_level,
+                                            note,
+                                            stability,
+                                            deprecated,
+                                            annotations: annotations.unwrap_or_default(),
+                                    },
+                                ));
+                            }
+                            // Register an attribute, then create a ref.
+                            AttributeSpec::Id {
+                                id,
+                                r#type,
+                                examples,
+                                brief,
+                                note,
+                                stability,
+                                deprecated,
+                                annotations,
+                                requirement_level,
+                                ..
+                            } => {
+                                attributes.push(v2::attribute::AttributeDef {
+                                    key: id.clone(),
+                                    r#type,
+                                    examples,
+                                    common: v2::CommonFields {
+                                        brief: brief.unwrap_or_default(),
+                                        note,
+                                        stability: stability
+                                            .unwrap_or(crate::stability::Stability::Alpha),
+                                        deprecated,
+                                        annotations: annotations.unwrap_or_default(),
+                                    },
+                                });
+                                attrs.push(v2::attribute::AttributeOrGroupRef::Attribute(
+                                    v2::attribute::AttributeRef {
+                                            r#ref: id,
+                                            brief: None,
+                                            examples: None,
+                                            requirement_level: Some(requirement_level),
+                                            note: None,
+                                            stability: None,
+                                            deprecated: None,
+                                            annotations: BTreeMap::new(),
+                                    },
+                                ));
+                            }
+                        }
+                    }
+                    events.push(v2::event::Event {
+                        name: g.name.unwrap_or_default().into(),
+                        attributes: attrs,
+                        entity_associations: g.entity_associations,
+                        common: v2::CommonFields {
+                            brief: g.brief,
+                            note: g.note,
+                            stability: g.stability.unwrap_or(crate::stability::Stability::Alpha),
+                            deprecated: g.deprecated,
+                            annotations: g.annotations.unwrap_or_default(),
+                        },
+                    });
+                }
                 GroupType::Span => {
                     let mut attrs = Vec::new();
                     // Handle group extends.
@@ -1265,7 +1357,12 @@ attributes:
                 stability: "stable"
                 brief: "description4"
                 type: "string"
-
+          - id: "group5"
+            type: event
+            name: "test"
+            brief: "A test event"
+            attributes:
+              - ref: "attr4"
         "#;
         let v1 = serde_yaml::from_str::<SemConvSpecV1>(spec).expect("Failed to parse spec");
         let v2 = v1.into_v2();
@@ -1295,6 +1392,12 @@ entities:
     requirement_level: recommended
   brief: description2
   stability: stable
+events:
+- name: test
+  attributes:
+  - ref: attr4
+  brief: A test event
+  stability: alpha
 metrics:
 - name: test.metric
   instrument: counter
