@@ -92,6 +92,28 @@ In the `imports` section, you can specify which metric, event, and entity groups
 to import from other registries. You can use a wildcard expression to import all
 groups in a namespace or specify individual groups by name.
 
+## Workflow Overview
+
+The typical workflow for using a custom telemetry schema involves creating the schema, resolving it with Weaver to incorporate any dependencies, and then using the resolved schema to generate code, documentation, or other artifacts.
+
+The following diagram illustrates this process:
+
+```mermaid
+sequenceDiagram
+    participant User
+    participant WeaverCLI as "Weaver CLI"
+    participant TelemetrySchema as "Custom Telemetry Schema (YAML)"
+    participant GeneratedCode as "Generated Code/Docs"
+
+    User->>TelemetrySchema: Create/Edit schema files
+    User->>WeaverCLI: Run `weaver registry resolve`
+    WeaverCLI->>TelemetrySchema: Read custom schema and dependencies
+    WeaverCLI-->>User: Output resolved schema
+    User->>WeaverCLI: Run `weaver registry generate`
+    WeaverCLI->>TelemetrySchema: Use resolved schema
+    WeaverCLI->>GeneratedCode: Generate artifacts based on templates
+```
+
 ## Run weaver commands on your schema
 
 To check the validity of your custom registry
