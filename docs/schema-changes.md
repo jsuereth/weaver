@@ -110,6 +110,26 @@ changes:
 
 ## Diffing Process
 
+The diffing process involves comparing two versions of a semantic convention registry—a "head" version (the newer one) and a "baseline" version (the older one)—to identify changes. The result is a structured diff report that categorizes each change.
+
+The following diagram illustrates this workflow:
+
+```mermaid
+sequenceDiagram
+    participant User
+    participant WeaverCLI as "Weaver CLI"
+    participant HeadRegistry as "Head Registry"
+    participant BaselineRegistry as "Baseline Registry"
+    participant DiffReport as "Diff Report (YAML/JSON)"
+
+    User->>WeaverCLI: Run `weaver registry diff`
+    WeaverCLI->>HeadRegistry: Load newer version
+    WeaverCLI->>BaselineRegistry: Load older version
+    WeaverCLI->>WeaverCLI: Compare registries based on defined rules
+    WeaverCLI->>DiffReport: Generate structured diff report
+    DiffReport-->>User: Output report
+```
+
 The following rules are applied during the diffing process to generate the schema
 changes for attributes:
 
