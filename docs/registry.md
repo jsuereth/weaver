@@ -1,5 +1,11 @@
 # Registry
 
+## Overview
+
+A telemetry schema registry is a collection of YAML files that define telemetry signals—such as metrics, logs, and traces—along with their associated attributes. It serves as a schema, or "source of truth," for how an application's instrumentation should be structured and what data it should emit.
+
+By defining signals in a structured, version-controlled format, a registry enables consistency, facilitates tooling, and allows for automated code generation, documentation, and validation. The official [OpenTelemetry Semantic Conventions](https://github.com/open-telemetry/semantic-conventions/tree/main/model) are a prominent example of a registry that provides a standardized framework for common telemetry signals.
+
 A registry defines telemetry using a schema.
 
 The official OTel Semantic Conventions are defined in a registry located at [open-telemetry/semantic-conventions/model](https://github.com/open-telemetry/semantic-conventions/tree/main/model).
