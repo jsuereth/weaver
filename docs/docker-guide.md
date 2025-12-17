@@ -31,6 +31,29 @@ This has four key components:
 - Binding the directory where code will be generated to the `/home/weaver/target` directory in the container: (` --mount 'type=bind,source=$(PWD)/src,target=/home/weaver/target'`)
 - Granting weaver usage of your `~/.weaver` directory: (`--env HOME=/tmp/weaver --mount 'type=bind,source=$(HOME)/.weaver,target=/tmp/weaver/.weaver'`)
 
+## Running with SELinux
+
+If you are using a system with SELinux enabled (e.g., CentOS, RHEL, Fedora), you may need to add the `:z` or `:Z` flag to the volume mounts. This ensures the container has the correct permissions to access the mounted directory.
+
+- Use the `:z` flag if the volume content is shared between multiple containers.
+- Use the `:Z` flag if the volume content is private to this container.
+
+Example command with the `:z` flag:
+
+```sh
+docker run --rm \
+        -u $(id -u ${USER}):$(id -g ${USER}) \
+        --env HOME=/tmp/weaver \
+        --mount 'type=bind,source=$(HOME)/.weaver,target=/tmp/weaver/.weaver' \
+        --mount 'type=bind,source=$(PWD)/templates,target=/home/weaver/templates:z,readonly' \
+        --mount 'type=bind,source=$(PWD)/src,target=/home/weaver/target:z' \
+        otel/weaver:latest \
+        registry generate \
+        --templates=/home/weaver/templates \
+        --target=markdown \
+        /home/weaver/target
+```
+
 ## Advanced Usage - Interactive Shell
 
 Weaver comes with an interactive component which can be leveraged with docker.  Simply run the container with an interactive terminal attached:
