@@ -2,7 +2,10 @@
 
 <kbd>weaver registry generate</kbd>
 
-|Quick Links | [weaver.yaml](weaver-config.md) | [JQ](/crates/weaver_forge/README.md#jq-filters-reference) | [Jinja](/crates/weaver_forge/README.md#jinja-filters-reference) |
+| Quick Links | [weaver.yaml](weaver-config.md) | [JQ Filters Reference](/crates/weaver_forge/README.md#jq-filters-reference) | [Jinja Filters Reference](/crates/weaver_forge/README.md#jinja-filters-reference) |
+|---|---|---|---|
+
+Weaver extends Jinja2 with a rich set of custom filters for case conversion, attribute manipulation, and more. For a complete list and detailed explanations, refer to the [Jinja Filters Reference in Weaver Forge documentation](/crates/weaver_forge/README.md#jinja-filters-reference).
 |-|-|-|-|
 
 A core element of schema-first telemetry are the artifacts it enables:
@@ -70,6 +73,33 @@ The markdown template could look like this:
 {% endfor %}
 
 ````
+
+## Practical Examples
+
+### Case Conversion Filters
+
+Weaver provides a suite of filters for transforming string casing, essential for adhering to language-specific naming conventions in generated code and documentation.
+
+| Filter | Input | Output |
+|---|---|---|
+| `snake_case` | `"myAttributeName"` | `my_attribute_name` |
+| `pascal_case` | `"my_attribute_name"` | `MyAttributeName` |
+| `camel_case` | `"my_attribute_name"` | `myAttributeName` |
+| `screaming_snake_case` | `"myAttributeName"` | `MY_ATTRIBUTE_NAME` |
+| `kebab_case` | `"myAttributeName"` | `my-attribute-name` |
+
+**Template Usage:**
+
+```jinja2
+// Input: "my.attribute-group"
+pub const {{ ctx.attribute.name | screaming_snake_case_const }}
+```
+
+**Generated Code:**
+
+```rust
+pub const MY_ATTRIBUTE_GROUP
+```
 
 When calling `weaver registry generate md`, the following happens:
 
