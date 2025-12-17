@@ -2,6 +2,29 @@
 
 This is an in-progress guide for how to use Weaver to develop your own Semantic Convention registry or codegen.
 
+## Getting Started
+
+To begin developing with Weaver, you'll need to set up your local environment with the Rust toolchain.
+
+### 1. Install Rust
+
+If you don't have Rust installed, the recommended way is to use `rustup`, the Rust toolchain installer. Follow the instructions on the [official Rust website](https://www.rust-lang.org/tools/install).
+
+### 2. Build the Project
+
+Once Rust is installed, you can build the Weaver project using `cargo`, the Rust build tool and package manager.
+
+```bash
+# Clone the repository (if you haven't already)
+git clone https://github.com/open-telemetry/weaver.git
+cd weaver
+
+# Build the project
+cargo build
+```
+
+This command will compile all the crates in the workspace and place the resulting binary in the `target/debug/` directory.
+
 TODO - Add more getting started guides.
 
 ## JQ - Tips and Tricks
