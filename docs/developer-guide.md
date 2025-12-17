@@ -25,7 +25,37 @@ cargo build
 
 This command will compile all the crates in the workspace and place the resulting binary in the `target/debug/` directory.
 
-TODO - Add more getting started guides.
+### 3. Running Tests
+
+To ensure your changes haven't introduced any regressions, you can run the test suite.
+
+To run all tests for the entire workspace:
+
+```bash
+cargo test --workspace
+```
+
+To run tests for a specific package (e.g., `weaver_semconv`):
+
+```bash
+cargo test --package weaver_semconv
+```
+
+### 4. Formatting and Linting
+
+Before submitting your changes, make sure your code is properly formatted and passes the linter checks.
+
+To format all code in the workspace:
+
+```bash
+cargo fmt --all
+```
+
+To run Clippy, the Rust linter, on all packages and targets:
+
+```bash
+cargo clippy --all-targets --all-features
+```
 
 ## JQ - Tips and Tricks
 
